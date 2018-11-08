@@ -35,6 +35,21 @@ def predict_squad(model, data, v2_on=False):
                 label_predictions[uid] = pred
     return span_predictions, label_predictions
 
+def predict_squad_decoupled(model_span, model_class, data, v2_on=False):
+    data.reset()
+    span_predictions = {}
+    label_predictions = {}
+    for batch in data:
+        phrase, spans, _scores = model_span.predict(batch)
+        _phrase, _spans, scores = model_class.predict(batch)
+        uids = batch['uids']
+        for uid, pred in zip(uids, phrase):
+            span_predictions[uid] = pred
+        if v2_on:
+            for uid, pred in zip(uids, scores):
+                label_predictions[uid] = pred
+    return span_predictions, label_predictions
+
 def load_squad_v2_label(path):
     rows = {}
     with open(path, encoding="utf8") as f:

@@ -16,10 +16,12 @@ from collections import Counter, defaultdict
 from src.model import DocReaderModel
 from src.batcher import load_meta, BatchGen
 from config import set_args
+from copy import copy
 from my_utils.utils import set_environment
 from my_utils.log_wrapper import create_logger
 from my_utils.squad_eval import evaluate
 from my_utils.data_utils import predict_squad, gen_name, load_squad_v2_label, compute_acc
+from my_utils.data_utils import predict_squad_decoupled
 from my_utils.squad_eval_v2 import my_evaluation as evaluate_v2
 
 args = set_args()
@@ -60,16 +62,28 @@ def main():
     # load golden standard
     dev_gold = load_squad(args.dev_gold)
 
-    model = DocReaderModel(opt, embedding)
+    opt_span, opt_class = copy(opt), copy(opt)
+    opt_span['classifier_on'] = False
+    opt_class['span_predictor_on'] = False
+
+    #best_checkpoint_path = os.path.join(model_dir, 'best_{}_checkpoint.pt'.format(version))
+    #check = torch.load(best_checkpoint_path)
+    #model = DocReaderModel(check['config'], embedding, state_dict=check['state_dict'])
+
+    model_span = DocReaderModel(opt_span, embedding)
+    model_class = DocReaderModel(opt_class, embedding)
+
     # model meta str
     headline = '############# Model Arch of SAN #############'
     # print network
-    logger.info('\n{}\n{}\n'.format(headline, model.network))
-    model.setup_eval_embed(embedding)
+    logger.info('\n{}\n{}\n'.format(headline, model_span.network))
+    model_span.setup_eval_embed(embedding)
+    model_class.setup_eval_embed(embedding)
 
-    logger.info("Total number of params: {}".format(model.total_param))
+    logger.info("Total number of params: {}".format(model_span.total_param))
     if args.cuda:
-        model.cuda()
+        model_span.cuda()
+        model_class.cuda()
 
     best_em_score, best_f1_score = 0.0, 0.0
 
@@ -78,15 +92,16 @@ def main():
         train_data.reset()
         start = datetime.now()
         for i, batch in enumerate(train_data):
-            model.update(batch)
-            if (model.updates) % args.log_per_updates == 0 or i == 0:
+            model_span.update(batch)
+            model_class.update(batch)
+            if (model_span.updates) % args.log_per_updates == 0 or i == 0:
                 logger.info('#updates[{0:6}] train loss[{1:.5f}] remaining[{2}]'.format(
-                    model.updates, model.train_loss.avg,
+                    model_span.updates, model_span.train_loss.avg,
                     str((datetime.now() - start) / (i + 1) * (len(train_data) - i - 1)).split('.')[0]))
         # dev eval
-        results, labels = predict_squad(model, dev_data, v2_on=args.v2_on)
+        results, labels = predict_squad_decoupled(model_span, model_class, dev_data, v2_on=args.v2_on)
         if args.v2_on:
-            metric = evaluate_v2(dev_gold, results, labels,  na_prob_thresh=args.classifier_threshold)
+            metric = evaluate_v2(dev_gold, results, labels, na_prob_thresh=args.classifier_threshold)
             em, f1 = metric['exact'], metric['f1']
             acc = compute_acc(labels, dev_labels)
         else:
@@ -97,19 +112,24 @@ def main():
         with open(output_path, 'w') as f:
             json.dump(results, f)
 
-        # setting up scheduler
-        if model.scheduler is not None:
+        # setting up scheduler; TODO: different schedules for class and SP
+        if model_span.scheduler is not None:
             logger.info('scheduler_type {}'.format(opt['scheduler_type']))
             if opt['scheduler_type'] == 'rop':
-                model.scheduler.step(f1, epoch=epoch)
+                model_span.scheduler.step(f1, epoch=epoch)
+                model_class.scheduler.step(f1, epoch=epoch)
             else:
-                model.scheduler.step()
+                model_span.scheduler.step()
+                model_class.scheduler.step()
         # save
-        model_file = os.path.join(model_dir, 'checkpoint_{}_epoch_{}.pt'.format(version, epoch))
+        model_file_span = os.path.join(model_dir, 'best_checkpoint_{}_span.pt'.format(version))
+        model_file_class = os.path.join(model_dir, 'best_checkpoint_{}_class.pt'.format(version))
 
-        model.save(model_file, epoch)
+        #model_span.save(model_file_span, epoch)
+        #model_class.save(model_file_class, epoch)
         if em + f1 > best_em_score + best_f1_score:
-            copyfile(os.path.join(model_dir, model_file), os.path.join(model_dir, 'best_{}_checkpoint.pt'.format(version)))
+            model_span.save(model_file_span, epoch)
+            model_class.save(model_file_class, epoch)
             best_em_score, best_f1_score = em, f1
             logger.info('Saved the new best model and prediction')
 

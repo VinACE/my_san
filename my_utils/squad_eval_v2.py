@@ -106,7 +106,7 @@ def apply_no_ans_threshold(scores, na_probs, qid_to_has_ans, na_prob_thresh):
     if pred_na:
       new_scores[qid] = float(not qid_to_has_ans[qid])
     else:
-      new_scores[qid] = s
+      new_scores[qid] = float(s)
   return new_scores
 
 def make_eval_dict(exact_scores, f1_scores, qid_list=None):
@@ -275,9 +275,11 @@ def my_evaluation(dataset, preds, na_probs=None, na_prob_thresh=1.0):
     has_ans_qids = [k for k, v in qid_to_has_ans.items() if v]
     no_ans_qids = [k for k, v in qid_to_has_ans.items() if not v]
     exact_raw, f1_raw = get_raw_scores(dataset, preds)
+    print(np.sum(list(exact_raw.values())), np.sum(list(f1_raw.values())) )
     exact_thresh = apply_no_ans_threshold(exact_raw, na_probs, qid_to_has_ans, na_prob_thresh)
     f1_thresh = apply_no_ans_threshold(f1_raw, na_probs, qid_to_has_ans, na_prob_thresh)
     out_eval = make_eval_dict(exact_thresh, f1_thresh)
+    print(np.sum(list(exact_thresh.values())), np.sum(list(f1_thresh.values())) )
     if has_ans_qids:
         has_ans_eval = make_eval_dict(exact_thresh, f1_thresh, qid_list=has_ans_qids)
         merge_eval(out_eval, has_ans_eval, 'HasAns')
