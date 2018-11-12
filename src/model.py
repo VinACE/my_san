@@ -92,28 +92,48 @@ class DocReaderModel(object):
 
         span_predictor_on = self.opt.get('span_predictor_on', True)
         classifier_on = self.opt.get('classifier_on', True)
+        use_original_loss = False
 
-        # if this is not regular mode AND it is a span predictor being trained
-        if span_predictor_on and not classifier_on:
-            # print(label.shape, start.shape, end.shape, y[0].shape, y[1].shape, (label==0).sum())
-            has_ans = (label == 0)
-            start = start[has_ans]
-            end = end[has_ans]
-            y = y[0][has_ans], y[1][has_ans]
-            if has_ans.sum() == 0:
-                self.updates += 1
-                self.reset_embeddings()
-                self.eval_embed_transfer = True
-                return
+        # Original loss with modifications
+        if use_original_loss:
+            # if this is not regular mode AND it is a span predictor being trained
+            if span_predictor_on and not classifier_on:
+                # print(label.shape, start.shape, end.shape, y[0].shape, y[1].shape, (label==0).sum())
+                has_ans = (label == 0)
+                start = start[has_ans]
+                end = end[has_ans]
+                y = y[0][has_ans], y[1][has_ans]
+                if has_ans.sum() == 0:
+                    self.updates += 1
+                    self.reset_embeddings()
+                    self.eval_embed_transfer = True
+                    return
 
-        passage_len = start.shape[1]
-        weights = torch.ones(passage_len).cuda()
-        weights[-1] = self.opt.get('end_weight', 1.)
-        loss = F.cross_entropy(start, y[0], weights) + F.cross_entropy(end, y[1], weights)
-        loss *= span_predictor_on
+            passage_len = start.shape[1]
+            weights = torch.ones(passage_len).cuda()
+            weights[-1] = self.opt.get('end_weight', 1.)
+            loss = F.cross_entropy(start, y[0], weights) + F.cross_entropy(end, y[1], weights)
+            loss *= span_predictor_on
 
-        if self.opt.get('v2_on', False) and classifier_on:
-            loss = loss + F.binary_cross_entropy(pred, torch.unsqueeze(label, 1)) * self.opt.get('classifier_gamma', 1)
+            if self.opt.get('v2_on', False) and classifier_on:
+                loss = loss + F.binary_cross_entropy(pred, torch.unsqueeze(label, 1)) * self.opt.get('classifier_gamma', 1)
+        
+        # new loss
+        else:
+            ans_bin = (label == 0)
+            unans_bin = 1 - has_ans
+
+            ans_sp = F.cross_entropy(start, y[0], weights) + F.cross_entropy(end, y[1], weights)
+            ans_alph = ans_sp * 2
+            loss_ans = (1 - pred) * ans_sp + pred * ans_alph
+            
+            passage_len = start.shape[1]
+            unif = torch.ones(passage_len)/passage_len
+            unans_sp = F.cross_entropy(start, unif, weights) + F.cross_entropy(end, unif, weights)
+            unans_alph = unans_sp * 4
+            loss_unans = pred * unans_sp + (1 - pred) * unans_alph
+
+            loss = ans_bin * loss_ans + unans_bin * loss_unans
 
         self.train_loss.update(loss.item(), len(start))
         self.optimizer.zero_grad()
