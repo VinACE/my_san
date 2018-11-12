@@ -120,20 +120,19 @@ class DocReaderModel(object):
         
         # new loss
         else:
-            ans_bin = (label == 0)
-            unans_bin = 1 - has_ans
-
-            ans_sp = F.cross_entropy(start, y[0], weights) + F.cross_entropy(end, y[1], weights)
+            ans_sp = F.cross_entropy(start, y[0], reduction='none') + F.cross_entropy(end, y[1], reduction='none')
             ans_alph = ans_sp * 2
             loss_ans = (1 - pred) * ans_sp + pred * ans_alph
-            
-            passage_len = start.shape[1]
-            unif = torch.ones(passage_len)/passage_len
-            unans_sp = F.cross_entropy(start, unif, weights) + F.cross_entropy(end, unif, weights)
-            unans_alph = unans_sp * 4
-            loss_unans = pred * unans_sp + (1 - pred) * unans_alph
+            loss_ans = ((1 - label) * loss_ans).mean()
 
-            loss = ans_bin * loss_ans + unans_bin * loss_unans
+            batch_size, passage_len = start.shape
+            #unif = torch.ones((batch_size, passage_len))/passage_len
+            #unans_sp = F.cross_entropy(start, unif) + F.cross_entropy(end, unif)
+            unans_alph = 10. #unans_sp * 4
+            loss_unans = (1 - pred) * unans_alph
+            loss_unans = (label * loss_unans).mean()
+
+            loss = loss_ans + loss_unans
 
         self.train_loss.update(loss.item(), len(start))
         self.optimizer.zero_grad()
